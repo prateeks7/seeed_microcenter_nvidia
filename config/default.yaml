@@ -1,5 +1,5 @@
 camera:
-  type: "orbbec_gemini2"
+  type: realsense_d405
   serial: null
   color_width: 1280
   color_height: 720
@@ -14,7 +14,7 @@ calibration:
   hand_eye_compensation_m:
     x: 0.00
     y: 0.0
-    z: -0.01
+    z: -0.02
 
 detection:
   conf_threshold: 0.5
@@ -52,7 +52,7 @@ robot:
 
 yolo:
   model_name: "yoloe-26l-seg.pt"
-  device: "cpu"
+  device: "0"
   use_world: true
   custom_classes:
     - "yellow banana"
@@ -63,16 +63,19 @@ yolo:
     - "tool"
     - "box"
     - "ball"
+    - "marker"
 
 place_task:                # starting values for scripts/set.py (all editable live in its window)
-  pick: "yellow banana"
-  place: "box"
+  pick: "ball"
+  place: "cup"
   release_clearance_m: 0.05  # drop this far above the destination's measured top (box rim, cup rim, table, ...)
 
 ui:                        # web UI (ui/server.py) header
   title: "AI Pick & Place"
   logos:                   # files in ui/static/logos/, shown left to right; height in px
+    - {file: "microcenter.png", alt: "Micro Center", height: 22}
     - {file: "seeed.png", alt: "Seeed Studio", height: 30}
+    - {file: "nvidia.png", alt: "NVIDIA", height: 32}
 
 grasp_pipeline:
   infer_every_live: 3
@@ -80,7 +83,7 @@ grasp_pipeline:
     depth_quantile: 0.5
     pregrasp_offset_m: 0.080
     insertion_depth_m: 0.015
-    min_base_z_m: -0.01
+    min_base_z_m: 0.00
   held_check:              # after lifting, look between the jaws with the wrist camera (set.py)
     enabled: true
     near_margin_m: 0.03    # depth within (gripper point + this) counts as "something held"
