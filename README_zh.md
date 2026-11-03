@@ -382,6 +382,11 @@ rebot_grasp/
 │   ├── ordinary_grasp_pipeline.py
 │   ├── object_detection.py
 │   └── collect_handeye_eih.py
+├── ui/
+│   ├── server.py                 # Web 界面服务（抓取放置、急停、回零）
+│   ├── backend.py                # 页面背后的相机 / 检测 / 机械臂工作线程
+│   ├── arm_motion.py             # 停止保持与折叠回休息位（使用 SDK 内部成员）
+│   └── static/                   # 页面、样式、脚本和标志
 ├── sdk/
 │   ├── pyorbbecsdk/              # Orbbec SDK Python 封装
 │   └── reBotArm_control_py/      # reBot Arm SDK
@@ -495,6 +500,34 @@ python scripts/set.py --skip-zero-check  # 见 main.py 中的启动零位检查
 **夹持检查。** 抬起后，腕部相机观察两个夹指之间的空隙：夹住的物体离相机很近，空夹爪则看到远处的桌面。这样可以发现电机感觉不到的轻物体或按尺寸限位的夹取。最近一次检查的图像保存在 `Log/held_check_latest.jpg` 和 `Log/held_check_depth.jpg`，便于调参。设置 `grasp_pipeline.held_check.enabled: false` 可关闭该检查。
 
 
+### 3b. `ui/server.py` — 抓取放置 Web 界面
+
+把 `scripts/set.py` 的流程做成适合触屏的网页，用于由观众操作机械臂、工作人员负责看护的演示场景。它使用相同的流程代码（`utils/pick_place.py`）和相同的配置。
+
+```bash
+python ui/server.py                  # 打开 http://localhost:8000（全屏：F11）
+python ui/server.py --host 0.0.0.0   # 局域网内的平板 / 手机也可访问
+python ui/server.py --dry-run        # 只检测和规划，不执行抓取动作
+python ui/server.py --no-robot       # 只运行相机和检测
+python ui/server.py --skip-zero-check
+```
+
+- 观众选择要抓取的物体和放置目标（预设来自 `yolo.custom_classes`，也可以输入），然后按 **START**。实时画面显示检测结果和可达区域，进度条跟随五个步骤。
+- **EMERGENCY STOP**（或空格键）取消当前动作，让机械臂停在原处保持不动；电机保持上电，夹爪保持夹持。程序继续运行。
+- **GO HOME** 解除急停并让机械臂（经预备位）折叠回休息位；抓取过程中按下会先停止抓取。
+- **Gripper** 卡片：夹爪开口指示，以及张开 / 闭合按钮。
+- **Settings** 卡片：检测阈值和释放高度。释放高度从**目标物体的顶部**（例如杯口）算起，而不是从桌面算起；页面会显示对应的离桌面高度，当该高度下没有可到达的释放点时会给出警告并禁用 START。
+- 齿轮图标打开工作人员面板：预备位、不移动直接解除急停、重试启动（可跳过零位检查）、状态和日志。
+- **Quit**（右上角，需要确认）先让机械臂折叠回休息位并闭合夹爪，再退出程序；若夹着物体会先松开。用其他方式结束程序也会同样停放机械臂：Ctrl+C、`kill <pid>` 或关闭终端。只有 `kill -9` 或断电会跳过。
+- 页头标题和标志来自配置中的 `ui` 部分；标志图片放在 `ui/static/logos/`。
+
+:::caution
+屏幕上的急停按钮是软件急停，不是安全等级的急停：请让机械臂的硬件电源开关始终触手可及。
+:::
+
+机械臂 SDK 没有公开接口用于取消正在执行的轨迹或执行关节空间运动，因此 `ui/arm_motion.py` 通过 `RebotArmEndPose` 的内部成员实现这两项功能（已在 reBotArm_control_py 0.1.0 上测试）。如果这些内部实现发生变化，只需修改这一个文件。
+
+
 ### 4. `scripts/ordinary_grasp_pipeline.py` — 简化抓取测试
 
 不依赖机械臂，仅验证 OBB 抓取姿态估计和可视化效果，适合调试感知模块。
@@ -586,6 +619,7 @@ python scripts/grasp.py --target-class "light blue coffee cup"
 | `grasp_pipeline.held_check.enabled` | `bool` | **夹持检查**：抬起后用腕部相机检查夹指之间是否有物体（`scripts/set.py`）。 |
 | `grasp_pipeline.held_check.near_margin_m` | `float` | **夹持检查余量**：深度在夹爪点之外该距离以内即视为夹住物体，单位为**米 (m)**。 |
 | `place_task.pick`<br/>`place_task.place` | `string` | **抓取放置标签**：`scripts/set.py` 的初始抓取物体和放置目标，可在其窗口中修改。 |
+| `ui.title`<br/>`ui.logos` | `string`<br/>`list` | **Web 界面页头**：`ui/server.py` 的标题和标志（`file` 为 `ui/static/logos/` 中的文件，`alt`，`height` 单位 px）。 |
 | `place_task.release_clearance_m` | `float` | **释放间隙**：在目标物体测得的顶部之上该高度处释放物体，单位为**米 (m)**。 |
 | `grasp_pipeline.grasp.min_base_z_m` | `float` | **最低抓取高度限制**：在**机械臂基坐标系**下允许的最低抓取 Z 轴高度，单位为**米 (m)**（作为底层防碰撞的安全边界）。 |
 | `graspnet` | 结构体配置 | **GraspNet 运行参数**：该配置项下的所有子参数供 `scripts/graspnet_camera_demo.py` 和 `scripts/grasp.py` 脚本运行时加载使用。 |

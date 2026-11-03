@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AI Pick &amp; Place</title>
+  <link rel="icon" href="/static/logos/seeed.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-status="starting">
+  <header class="topbar">
+    <div id="brands" class="brands"></div>  <!-- logos from config ui.logos -->
+    <div class="title">
+      <h1 id="appTitle">AI Pick <span>&amp;</span> Place</h1>
+      <p>Tell the robot what to move &mdash; it finds it, grabs it and drops it off.</p>
+    </div>
+    <div class="top-right">
+      <div id="statusPill" class="pill"><i></i><span>Starting</span></div>
+      <button id="staffBtn" class="icon-btn" aria-label="Staff controls" title="Staff controls">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+      </button>
+      <button id="quitBtn" class="quit-btn" title="Park the arm and quit">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M11 3h2v10h-2zm6.7 2.3-1.4 1.4A7 7 0 1 1 7.7 6.7L6.3 5.3a9 9 0 1 0 11.4 0z"/></svg>
+        <span>Quit</span>
+      </button>
+    </div>
+  </header>
+
+  <div id="connBanner" class="banner hidden">Lost connection to the robot &mdash; reconnecting&hellip;</div>
+
+  <main class="layout">
+    <!-- ============ camera ============ -->
+    <section class="stage">
+      <div class="video-wrap">
+        <img id="video" src="/video" alt="Live view from the robot's wrist camera">
+        <div id="videoPlaceholder" class="video-placeholder">
+          <div class="spinner"></div><span>Starting the camera&hellip;</span>
+        </div>
+
+        <div class="hud hud-tl">
+          <span id="liveBadge" class="badge"><i></i>LIVE <b id="fps">--</b></span>
+          <span id="modeBadge" class="badge badge-warn hidden">DRY RUN</span>
+        </div>
+        <div id="stepBanner" class="step-banner hidden"></div>
+        <div class="hud hud-bl legend">
+          <span><i class="sw sw-pick"></i>Arm can pick here</span>
+          <span><i class="sw sw-place"></i>Arm can drop here</span>
+        </div>
+
+        <div id="resultOverlay" class="result-overlay hidden" role="status">
+          <div class="result-card">
+            <div id="resultIcon" class="result-icon"></div>
+            <div id="resultText" class="result-text"></div>
+          </div>
+        </div>
+
+        <div id="stopOverlay" class="stop-overlay hidden">
+          <div class="stop-card">
+            <div class="stop-title">EMERGENCY STOP</div>
+            <p>The arm is frozen in place and holding still.</p>
+            <p>When the area is clear, press <b>GO HOME</b>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-foot">
+        <ol id="steps" class="steps" aria-label="Progress">
+          <li data-step="1"><span class="dot">1</span><span class="lbl">Look</span></li>
+          <li data-step="2"><span class="dot">2</span><span class="lbl">Grab</span></li>
+          <li data-step="3"><span class="dot">3</span><span class="lbl">Lift</span></li>
+          <li data-step="4"><span class="dot">4</span><span class="lbl">Drop</span></li>
+          <li data-step="5"><span class="dot">5</span><span class="lbl">Return</span></li>
+        </ol>
+        <div class="counter" title="Successful picks this session">
+          <b id="successCount">0</b><span>successful<br>picks</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ controls ============ -->
+    <aside class="rail">
+      <section class="safety" aria-label="Safety">
+        <button id="estopBtn" class="estop" aria-label="Emergency stop">
+          <span class="estop-ring"><span class="estop-cap">STOP</span></span>
+        </button>
+        <div class="safety-side">
+          <button id="homeBtn" class="btn btn-home">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/></svg>
+            GO HOME
+          </button>
+          <p class="hint">Stop freezes the arm in place.<br>Go Home folds it to rest. <kbd>Space</kbd> = stop</p>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Task">
+        <div class="card-head"><h2>Task</h2><span class="sub">Choose, then press Start</span></div>
+        <div class="task">
+          <div class="picker" data-role="pick">
+            <span class="picker-cap"><i class="sw sw-pick"></i>Pick up</span>
+            <button class="picker-btn" type="button" aria-haspopup="listbox">
+              <span class="emoji"></span><span class="name"></span>
+              <svg class="caret" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </button>
+            <span class="seen"></span>
+          </div>
+          <div class="arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M4 11h12.2l-5.6-5.6L12 4l8 8-8 8-1.4-1.4 5.6-5.6H4z"/></svg>
+          </div>
+          <div class="picker" data-role="place">
+            <span class="picker-cap"><i class="sw sw-place"></i>Drop on / into</span>
+            <button class="picker-btn" type="button" aria-haspopup="listbox">
+              <span class="emoji"></span><span class="name"></span>
+              <svg class="caret" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </button>
+            <span class="seen"></span>
+          </div>
+        </div>
+        <button id="startBtn" class="btn btn-start" disabled>
+          <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+          <span id="startLabel">START</span>
+        </button>
+      </section>
+
+      <section class="card" aria-label="Gripper">
+        <div class="card-head"><h2>Gripper</h2><span id="holdTag" class="tag hidden">Holding an object</span></div>
+        <div class="gauge" aria-label="Gripper opening">
+          <div class="gauge-track"><div id="jawFill" class="gauge-fill"></div></div>
+          <span id="jawText" class="gauge-text">&ndash;</span>
+        </div>
+        <div class="btn-pair">
+          <button id="openBtn" class="btn btn-outline" data-gripper="open">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3 5h3v14H3zm15 0h3v14h-3zM8 11h3V8l4 4-4 4v-3H8z" transform="scale(-1,1) translate(-24,0)"/></svg>
+            Open
+          </button>
+          <button id="closeBtn" class="btn btn-outline" data-gripper="close">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3 5h3v14H3zm15 0h3v14h-3zM8 11h3V8l4 4-4 4v-3H8z"/></svg>
+            Close
+          </button>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Settings">
+        <div class="card-head"><h2>Settings</h2><span class="sub">Apply to the next pick</span></div>
+        <label class="field">
+          <span class="field-label">Detection threshold</span>
+          <select id="confSelect"></select>
+          <span class="help">How sure the camera must be before it counts an object.
+            Higher = fewer wrong matches; lower = finds harder-to-see objects.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Release height</span>
+          <select id="clrSelect"></select>
+          <span id="clrHelp" class="help"></span>
+        </label>
+      </section>
+
+      <section id="errorCard" class="card card-error hidden">
+        <div class="card-head"><h2>Startup problem</h2></div>
+        <p id="errorText"></p>
+        <pre id="zeroReport" class="hidden"></pre>
+        <p class="help">Staff: fix the issue, then retry from the staff panel (gear icon).</p>
+      </section>
+    </aside>
+  </main>
+
+  <!-- object / destination menu (shared by both pickers) -->
+  <div id="menu" class="menu hidden" role="listbox">
+    <div id="menuGrid" class="menu-grid"></div>
+    <form id="customForm" class="menu-custom">
+      <input id="customInput" maxlength="40" autocomplete="off" placeholder="Or type anything, e.g. red apple">
+      <button class="btn btn-small btn-green" type="submit">Use</button>
+    </form>
+  </div>
+
+  <div id="drawerScrim" class="scrim hidden"></div>
+  <aside id="drawer" class="drawer" aria-hidden="true" aria-label="Staff controls">
+    <div class="drawer-head">
+      <h2>Staff controls</h2>
+      <button id="drawerClose" class="icon-btn" aria-label="Close">&times;</button>
+    </div>
+    <section>
+      <h3>Arm</h3>
+      <div class="btn-row">
+        <button class="btn btn-small" data-cmd="ready">Move to ready pose</button>
+        <button class="btn btn-small btn-ghost" data-cmd="clear_stop" title="Release the stop without moving the arm">Clear stop (stay in place)</button>
+      </div>
+      <div id="retryRow" class="btn-row hidden">
+        <button class="btn btn-small" data-retry="0">Retry startup</button>
+        <button class="btn btn-small btn-danger" data-retry="1">Retry, skip zero check</button>
+      </div>
+    </section>
+    <section>
+      <h3>Status</h3>
+      <dl id="facts" class="facts"></dl>
+    </section>
+    <section class="log-section">
+      <h3>Log</h3>
+      <pre id="log" class="log"></pre>
+    </section>
+  </aside>
+
+  <!-- quit: confirmation, then progress / goodbye -->
+  <div id="quitDialog" class="modal-scrim hidden">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="quitTitle">
+      <div class="modal-icon">
+        <svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M11 3h2v10h-2zm6.7 2.3-1.4 1.4A7 7 0 1 1 7.7 6.7L6.3 5.3a9 9 0 1 0 11.4 0z"/></svg>
+      </div>
+      <h2 id="quitTitle">Shut down the robot?</h2>
+      <p>The arm will fold back to its <b>rest position</b> and <b>close the gripper</b>, then the program exits.</p>
+      <p id="quitHeld" class="modal-warn hidden">The gripper is holding an object &mdash; it will be <b>let go first</b>, where the arm is now.</p>
+      <p class="modal-note">Make sure nobody is reaching into the arm's area.</p>
+      <div class="modal-actions">
+        <button id="quitCancel" class="btn btn-ghost">Cancel</button>
+        <button id="quitConfirm" class="btn btn-danger-solid">Park &amp; Quit</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="byeScreen" class="bye hidden">
+    <div class="bye-card">
+      <div id="byeSpinner" class="spinner"></div>
+      <h2 id="byeTitle">Parking the arm&hellip;</h2>
+      <p id="byeText">Folding to the rest position and closing the gripper. The program will close when done.</p>
+      <button id="byeStop" class="btn btn-danger-solid bye-stop">EMERGENCY STOP</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="alert"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

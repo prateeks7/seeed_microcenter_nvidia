@@ -69,6 +69,11 @@ place_task:                # starting values for scripts/set.py (all editable li
   place: "box"
   release_clearance_m: 0.05  # drop this far above the destination's measured top (box rim, cup rim, table, ...)
 
+ui:                        # web UI (ui/server.py) header
+  title: "AI Pick & Place"
+  logos:                   # files in ui/static/logos/, shown left to right; height in px
+    - {file: "seeed.png", alt: "Seeed Studio", height: 30}
+
 grasp_pipeline:
   infer_every_live: 3
   grasp:

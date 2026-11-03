@@ -314,10 +314,11 @@ class PickPlaceSession:
     def move_ready(self, controller: Any = None) -> None:
         move_ready(controller or self.controller, self.ready_cfg)
 
-    def close(self) -> None:
-        """Release the gripper, home (SDK safe_home) and disconnect the arm; close the camera."""
+    def close(self, release_gripper: bool = True) -> None:
+        """Release the gripper (unless release_gripper is False), home (SDK safe_home) and disconnect
+        the arm; close the camera."""
         try:
-            if self.robot_running and self.grasp_driver is not None:
+            if release_gripper and self.robot_running and self.grasp_driver is not None:
                 self.grasp_driver.release_gripper()
         except Exception as exc:
             print(f"[Exit] {exc}")

@@ -405,6 +405,11 @@ rebot_grasp/
 │   ├── ordinary_grasp_pipeline.py
 │   ├── object_detection.py
 │   └── collect_handeye_eih.py
+├── ui/
+│   ├── server.py                 # Web UI server (pick & place, E-stop, Go Home)
+│   ├── backend.py                # Camera / detection / arm worker behind the page
+│   ├── arm_motion.py             # Stop-and-hold and fold-to-rest moves (SDK internals)
+│   └── static/                   # Page, styles, script and logos
 ├── sdk/
 │   ├── pyorbbecsdk/              # Orbbec SDK Python wrapper
 │   └── reBotArm_control_py/      # reBot Arm SDK
@@ -518,6 +523,34 @@ Two sliders in the window set the detection confidence threshold and the release
 **Held check.** After lifting, the wrist camera looks into the gap between the jaws: a held object is close to the camera, an empty gripper shows the table far behind. This catches light or size-limited grasps the gripper motor cannot feel. The last check's images are saved to `Log/held_check_latest.jpg` and `Log/held_check_depth.jpg` for tuning. Disable it with `grasp_pipeline.held_check.enabled: false`.
 
 
+### 3b. `ui/server.py` — Web UI for Pick and Place
+
+The `scripts/set.py` flow as a touch-friendly web page, for demos where visitors run the arm and staff look after it. It uses the same pipeline (`utils/pick_place.py`) and the same config.
+
+```bash
+python ui/server.py                  # open http://localhost:8000 (full screen: F11)
+python ui/server.py --host 0.0.0.0   # also reachable from a tablet / phone on the network
+python ui/server.py --dry-run        # detect and plan, no pick motion
+python ui/server.py --no-robot       # camera and detection only
+python ui/server.py --skip-zero-check
+```
+
+- Visitors choose the object and the destination (presets from `yolo.custom_classes`, or type one) and press **START**. The live view shows the detections and the reach zones, and a progress bar follows the five steps.
+- **EMERGENCY STOP** (or the Space key) cancels the motion and holds the arm where it is; the motors stay powered and the gripper keeps what it holds. The program keeps running.
+- **GO HOME** clears the stop and folds the arm to its rest pose (via the ready pose); pressed during a pick, it stops the pick first.
+- **Gripper** card: jaw-opening gauge with Open / Close buttons.
+- **Settings** card: detection threshold and release height. The release height is measured from the **top of the destination** (e.g. a cup's rim), not from the table; the page shows the resulting height above the table, and disables START with a warning when no release point at that height is reachable.
+- The gear icon opens the staff panel: ready pose, clear the stop without moving, startup retry (optionally skipping the zero check), status and the log.
+- **Quit** (top right, asks for confirmation) folds the arm to its rest pose, closes the gripper, then stops the program; a held object is let go first. Stopping the program any other way parks the arm the same way: Ctrl+C, `kill <pid>`, or closing the terminal. Only `kill -9` or cutting the power skip it.
+- Header title and logos come from the `ui` section of the config; logo files go in `ui/static/logos/`.
+
+:::caution
+The on-screen E-stop is a software stop, not a safety-rated one: keep the arm's hardware power switch within reach.
+:::
+
+The arm SDK has no public call to cancel a running trajectory or to make a joint-space move, so `ui/arm_motion.py` does both through `RebotArmEndPose` internals (tested with reBotArm_control_py 0.1.0). It is the one file to update if those internals change.
+
+
 ### 4. `scripts/ordinary_grasp_pipeline.py` — Simplified Grasp Testing
 
 Does not depend on the robotic arm; only verifies OBB grasp pose estimation and visualization effects, suitable for debugging the perception module.
@@ -609,6 +642,7 @@ Note: For other advanced gripper control behavior parameters, refer to and defin
 | `grasp_pipeline.held_check.enabled` | `bool` | **Held Check**: After lifting, check with the wrist camera that something is between the jaws (`scripts/set.py`). |
 | `grasp_pipeline.held_check.near_margin_m` | `float` | **Held Check Margin**: Depth within this distance beyond the gripper point counts as a held object, in **meters (m)**. |
 | `place_task.pick`<br/>`place_task.place` | `string` | **Pick-and-Place Labels**: Starting pick object and destination for `scripts/set.py`; both can be changed in its window. |
+| `ui.title`<br/>`ui.logos` | `string`<br/>`list` | **Web UI Header**: Title and logos (`file` in `ui/static/logos/`, `alt`, `height` in px) of `ui/server.py`. |
 | `place_task.release_clearance_m` | `float` | **Release Clearance**: Height above the destination's measured top at which the object is released, in **meters (m)**. |
 | `grasp_pipeline.grasp.min_base_z_m` | `float` | **Minimum Grasp Height Limit**: The minimum allowable grasp Z-axis height in the **robot base frame**, in **meters (m)** (used as a底层防碰撞safety boundary). |
 | `graspnet` | struct config | **GraspNet Runtime Parameters**: All sub-parameters under this configuration item are loaded when running `scripts/graspnet_camera_demo.py` and `scripts/grasp.py`. |
