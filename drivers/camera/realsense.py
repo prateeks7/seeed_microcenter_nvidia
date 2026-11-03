@@ -23,11 +23,15 @@ class RealsenseCamera(CameraDriver):
         height: int = 720,
         fps: int = 30,
         calib_dir: Optional[str] = None,
+        serial: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> None:
         self._w = width
         self._h = height
         self._fps = fps
         self._calib_dir = Path(calib_dir) if calib_dir else None
+        self._serial = str(serial) if serial else None
+        self._model = model.upper() if model else None   # e.g. "D405", "D435I"
 
         self._pipeline = None
         self._align = None
@@ -45,10 +49,14 @@ class RealsenseCamera(CameraDriver):
         except ImportError as e:
             raise RuntimeError(f"pyrealsense2 is not installed: {e}") from e
 
+        serial = self._select_serial(rs)
+
         errors = []
         for width, height, fps in self._profile_candidates():
             pipeline = rs.pipeline()
             config = rs.config()
+            if serial:
+                config.enable_device(serial)
             config.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
             config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
             try:
@@ -139,6 +147,25 @@ class RealsenseCamera(CameraDriver):
         return self._D
 
     # Internals
+
+    def _select_serial(self, rs) -> Optional[str]:
+        """Pick a device by configured serial, else by model when several are attached."""
+        if self._serial:
+            return self._serial
+        devices = [
+            (d.get_info(rs.camera_info.name), d.get_info(rs.camera_info.serial_number))
+            for d in rs.context().query_devices()
+        ]
+        if len(devices) <= 1 or not self._model:
+            return None
+        for name, serial in devices:
+            if name.upper().endswith(self._model):
+                print(f"[RealsenseCamera] Selected {name} (serial {serial})")
+                return serial
+        raise RuntimeError(
+            f"No RealSense {self._model} among connected devices: {devices}\n"
+            f"  Set camera.type or camera.serial in config/default.yaml."
+        )
 
     def _load_distortion(self) -> np.ndarray:
         if self._calib_dir is not None:

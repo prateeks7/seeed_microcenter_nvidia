@@ -71,7 +71,7 @@ url: https://wiki.seeedstudio.com/rebot_arm_b601_dm_grasping_demo/
 | Robotic Arm | reBot Arm B601 (DM / RS configurations) |
 | Depth Camera | Orbbec Gemini 2, Intel RealSense D435i / D405 |
 | Communication Interface | USB2CAN serial bridge (arm); USB 3.0 (camera) |
-| Host | Ubuntu 22.04+, Python 3.10, x86_64 |
+| Host | Ubuntu 22.04+, Python 3.10, x86_64 or NVIDIA Jetson Thor (JetPack 7, aarch64) |
 
 **Wiring Instructions**
 
@@ -114,6 +114,21 @@ conda activate rebotarm
 If you want to use a different environment name, replace `rebotarm` in the command with your custom name.
 
 :::
+
+**NVIDIA Jetson Thor (JetPack 7, CUDA 13)**
+
+The same `environment.yml` works on Jetson Thor. Two things differ from an x86 PC:
+
+- Install the CUDA 13 build of PyTorch (aarch64 wheels are on the PyTorch index), then check that the GPU is visible:
+
+  ```bash
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+  python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+  ```
+
+- Run detection on the GPU: set `yolo.device: "0"` in `config/default.yaml`. YOLOE-26L takes about 30 ms per frame on the Thor GPU, against several seconds on its CPU.
+
+`environment.yml` pins conda-forge's OpenBLAS (`libblas=*=*openblas`): the NVPL BLAS build conda-forge picks on aarch64 makes `import numpy` fail. The pin changes nothing on x86, where OpenBLAS is already the default.
 
 
 ### Step 3. Install the Robotic Arm Control Library
@@ -502,7 +517,7 @@ Pure YOLO detection demonstration with real-time display of detection boxes and 
 | Parameter | Type / Options | Meaning and Description |
 | :--- | :--- | :--- |
 | `camera.type` | `realsense_d435i`<br/>`realsense_d405`<br/>`orbbec_gemini2` | **Camera Type**: Specifies the camera hardware connected to the current system. |
-| `camera.serial` | `string` / `null` | **Device Serial Number**: Specifies the device SN number. Set to `null` to use the first available device detected by the system. |
+| `camera.serial` | `string` / `null` | **Device Serial Number**: Specifies the device SN number. With `null`, a RealSense camera is chosen by the model in `camera.type` (e.g. the D405 when a D405 and a D435i are both connected); with only one camera connected, that camera is used. |
 | `calibration.aruco.marker_length_m` | `float` | **ArUco Marker Size**: The actual physical side length of the ArUco calibration marker used for hand-eye calibration, in **meters (m)**. |
 | `calibration.hand_eye_compensation_m` | `array` | **Hand-Eye Calibration Translation Compensation**: XYZ manual translation compensation (format `[X, Y, Z]`) executed in the **robot base frame** after hand-eye calibration is complete, in **meters (m)**. If all three values are `0.0`, the compensation matrix is the identity matrix. |
 

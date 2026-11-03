@@ -23,7 +23,9 @@ def make_camera(cfg: dict) -> CameraDriver:
     if "orbbec" in cam_type:
         return OrbbecGemini2(w, h, fps, calib_dir=calib_dir)
     elif "realsense" in cam_type:
-        return RealsenseCamera(w, h, fps, calib_dir=calib_dir)
+        model = cam_type.split("_", 1)[1] if "_" in cam_type else None
+        return RealsenseCamera(w, h, fps, calib_dir=calib_dir,
+                               serial=cam_cfg.get("serial"), model=model)
     else:
         raise ValueError(
             f"Unsupported camera type: {cam_type!r}\n"

@@ -9,11 +9,13 @@ dependencies:
   - pinocchio=3.9.0
   - matplotlib>=3.10.0
   - pyyaml>=6.0
+  - libblas=*=*openblas    # conda-forge's NVPL BLAS breaks numpy import on aarch64 (e.g. Jetson)
   - pip
   - pip:
       - opencv-python==4.7.0.72
       - opencv-contrib-python==4.7.0.72
       - ultralytics==8.4.35
+      - git+https://github.com/ultralytics/CLIP.git    # text encoder YOLOE needs for set_classes
       - pyrealsense2>=2.54
       - meshcat>=0.3.2
       - motorbridge>=0.1.7

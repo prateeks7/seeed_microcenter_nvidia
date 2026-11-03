@@ -48,7 +48,7 @@
 | 机械臂 | reBot Arm B601（DM / RS 两种配置） |
 | 深度相机 | Orbbec Gemini 2、Intel RealSense D435i / D405 |
 | 通信接口 | USB2CAN 串口桥接器（机械臂）；USB 3.0（相机） |
-| 主机 | Ubuntu 22.04+，Python 3.10，x86_64 |
+| 主机 | Ubuntu 22.04+，Python 3.10，x86_64 或 NVIDIA Jetson Thor（JetPack 7，aarch64） |
 
 **接线说明**
 
@@ -91,6 +91,21 @@ conda activate rebotarm
 如果你想使用其他环境名，可以将命令中的 `rebotarm` 替换为自定义名称。
 
 :::
+
+**NVIDIA Jetson Thor（JetPack 7，CUDA 13）**
+
+Jetson Thor 上使用同一个 `environment.yml`，与 x86 PC 相比有两点不同：
+
+- 安装 CUDA 13 版本的 PyTorch（PyTorch 官方源提供 aarch64 wheel），并确认 GPU 可用：
+
+  ```bash
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+  python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+  ```
+
+- 在 GPU 上运行检测：在 `config/default.yaml` 中设置 `yolo.device: "0"`。YOLOE-26L 在 Thor GPU 上每帧约 30 ms，在 CPU 上则需要数秒。
+
+`environment.yml` 固定使用 conda-forge 的 OpenBLAS（`libblas=*=*openblas`）：conda-forge 在 aarch64 上默认选择的 NVPL BLAS 会导致 `import numpy` 失败。在 x86 上 OpenBLAS 本来就是默认值，该设置没有影响。
 
 
 ### Step 3. 安装机械臂控制库
@@ -479,7 +494,7 @@ python scripts/grasp.py --target-class "light blue coffee cup"
 | 参数项 | 类型 / 可选值 | 含义与详细说明 |
 | :--- | :--- | :--- |
 | `camera.type` | `realsense_d435i`<br/>`realsense_d405`<br/>`orbbec_gemini2` | **相机类型**：指定当前系统连接的相机硬件。 |
-| `camera.serial` | `string` / `null` | **设备序列号**：指定具体的设备 SN 号。填写 `null` 表示默认使用系统检测到的第一台可用设备。 |
+| `camera.serial` | `string` / `null` | **设备序列号**：指定具体的设备 SN 号。填写 `null` 时，RealSense 相机按 `camera.type` 中的型号选择（例如同时连接 D405 和 D435i 时选择 D405）；只连接一台相机时直接使用该相机。 |
 | `calibration.aruco.marker_length_m` | `float` | **ArUco 边长**：手眼标定所使用的 ArUco 标定码实际物理边长，单位为**米 (m)**。 |
 | `calibration.hand_eye_compensation_m` | `array` | **手眼标定平移补偿**：手眼标定完成后，在**机器人基坐标系**下执行的 XYZ 手动平移补偿（格式为 `[X, Y, Z]`），单位为**米 (m)**。若三项全为 `0.0`，则补偿矩阵为单位矩阵。 |
 
