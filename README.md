@@ -395,6 +395,9 @@ rebot_grasp/
 │   └── hand_eye.py               # Hand-eye calibration solver
 ├── utils/
 │   ├── ordinary_grasp.py         # OBB grasp pose estimation and visualization
+│   ├── pick_place.py             # Pick-and-place pipeline (used by set.py)
+│   ├── reach_map.py              # Reach zones: where the arm can pick / release
+│   ├── grasp_check.py            # Wrist-camera check that the gripper holds something
 │   └── transforms.py             # Coordinate transformation utilities
 ├── scripts/
 │   ├── main.py                   # Main grasping program
@@ -482,15 +485,37 @@ python scripts/main.py --skip-zero-check  # skip the startup zero check (see bel
 
 ### 3. `scripts/set.py` — Grasp and Place Program
 
-Function: Grasp the banana and place it in the box
+Function: pick up one object and drop it into or onto another (by default the banana into the box). Both are text labels, so with an open-vocabulary model (YOLOE / YOLO-World) any pair can be chosen while the program runs.
+
+```bash
+python scripts/set.py
+python scripts/set.py --pick "orange ball" --place "cup" --release-clearance 0.05
+python scripts/set.py --dry-run          # detect and plan, do not move the arm
+python scripts/set.py --skip-zero-check  # see the startup zero check under main.py
+```
 
 Completed flow:
-1. Camera and arm initialization, move to ready position
-2. Real-time camera preview + YOLO object detection and instance segmentation
-3. Press `G` to freeze frame, compute arm target pose via hand-eye transformation
-4. Arm moves to grasp banana and lift
-5. Arm places banana in the box and returns to initial pose
-6. Press `Q` to exit system, arm returns to zero position
+1. Camera and arm initialization (startup zero check), move to ready position
+2. Real-time camera preview + YOLO detection of the two objects, with the reach zones drawn on the view
+3. Press `G` to freeze the frame, compute the arm poses via hand-eye transformation and check each one with IK
+4. Arm grasps the object and lifts it; the wrist camera checks it is really held
+5. Arm moves above the destination, releases the object and returns to the ready position
+6. Press `Q` to exit; the gripper is released and the arm returns to zero
+
+| Key | Action |
+| --- | --- |
+| `P` / `D` | Type a new pick object / destination in the window (`Enter` applies, `Esc` cancels) |
+| `G` | Capture and execute pick and place |
+| `R` | Resume the live preview after a capture |
+| `Q` / `Esc` | Release the gripper, home and exit |
+
+Two sliders in the window set the detection confidence threshold and the release clearance.
+
+**Release height.** The object is released at the destination's top plus the clearance, not at a fixed height. The top is measured from depth over the destination's segmentation mask (a cup's rim; about 0 for a spot on the table) and smoothed over recent frames. The panel in the top-right corner shows the measured top.
+
+**Reach zones.** Green = the arm can pick here; blue stripes = it can release here, at the current release height. Both come from the arm's IK at the ready pose, the pose every pick starts from, so they apply only while the arm is there. The pick zone is computed once at startup (a few seconds). The release zone is recomputed in the background when the release height changes by at least 3 cm for 1.5 s. A higher release point leaves a smaller release zone, and above some height the arm cannot reach it anywhere in view. Before moving, the pregrasp, grasp and release poses are each checked with IK, so an object that could not be placed is never picked up.
+
+**Held check.** After lifting, the wrist camera looks into the gap between the jaws: a held object is close to the camera, an empty gripper shows the table far behind. This catches light or size-limited grasps the gripper motor cannot feel. The last check's images are saved to `Log/held_check_latest.jpg` and `Log/held_check_depth.jpg` for tuning. Disable it with `grasp_pipeline.held_check.enabled: false`.
 
 
 ### 4. `scripts/ordinary_grasp_pipeline.py` — Simplified Grasp Testing
@@ -581,6 +606,10 @@ Note: For other advanced gripper control behavior parameters, refer to and defin
 | `grasp_pipeline.grasp.depth_quantile` | `float` | **Depth Quantile**: The depth calculation quantile used by the short-axis grasping pipeline. A larger value typically results in a deeper grasp point. |
 | `grasp_pipeline.grasp.pregrasp_offset_m` | `float` | **Pre-grasp Position Offset**: The distance to retreat along the end effector feed direction relative to the final target grasp position, in **meters (m)**. |
 | `grasp_pipeline.grasp.insertion_depth_m` | `float` | **Insertion Depth**: The additional forward push or insertion depth along the feed direction when GraspNet executes grasping, in **meters (m)**. |
+| `grasp_pipeline.held_check.enabled` | `bool` | **Held Check**: After lifting, check with the wrist camera that something is between the jaws (`scripts/set.py`). |
+| `grasp_pipeline.held_check.near_margin_m` | `float` | **Held Check Margin**: Depth within this distance beyond the gripper point counts as a held object, in **meters (m)**. |
+| `place_task.pick`<br/>`place_task.place` | `string` | **Pick-and-Place Labels**: Starting pick object and destination for `scripts/set.py`; both can be changed in its window. |
+| `place_task.release_clearance_m` | `float` | **Release Clearance**: Height above the destination's measured top at which the object is released, in **meters (m)**. |
 | `grasp_pipeline.grasp.min_base_z_m` | `float` | **Minimum Grasp Height Limit**: The minimum allowable grasp Z-axis height in the **robot base frame**, in **meters (m)** (used as a底层防碰撞safety boundary). |
 | `graspnet` | struct config | **GraspNet Runtime Parameters**: All sub-parameters under this configuration item are loaded when running `scripts/graspnet_camera_demo.py` and `scripts/grasp.py`. |
 

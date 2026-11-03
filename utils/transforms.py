@@ -247,3 +247,29 @@ def graspnet_rotation_to_rebot_tcp_rotation(grasp_rotation: np.ndarray) -> np.nd
         raise ValueError(f"grasp_rotation must be (3, 3), got {R.shape}")
 
     return _nearest_rotation_matrix(np.column_stack([R[:, 0], R[:, 1], np.cross(R[:, 0], R[:, 1])]))
+
+
+def mask_top_height_in_base(
+    mask: np.ndarray,
+    depth_mm: np.ndarray,
+    K: np.ndarray,
+    T_cam2base: np.ndarray,
+    quantile: float = 0.95,
+    min_points: int = 30,
+) -> float | None:
+    """Base-frame height of the top of a masked object (e.g. a cup rim), from its depth pixels.
+
+    Uses a high quantile of the object's 3D point heights, so a few noisy pixels do not set it.
+    Returns None when the mask has too few valid depth pixels.
+    """
+    vs, us = np.nonzero((np.asarray(mask) > 0) & (np.asarray(depth_mm) > 0))
+    if len(us) < min_points:
+        return None
+    if len(us) > 20000:                       # plenty for a quantile; keeps it fast
+        keep = np.linspace(0, len(us) - 1, 20000).astype(np.int64)
+        vs, us = vs[keep], us[keep]
+    z = depth_mm[vs, us].astype(np.float64) / 1000.0
+    pts_cam = np.vstack([(us - K[0, 2]) * z / K[0, 0], (vs - K[1, 2]) * z / K[1, 1], z])
+    T = np.asarray(T_cam2base, dtype=np.float64)
+    heights = T[2, :3] @ pts_cam + T[2, 3]
+    return float(np.quantile(heights, quantile))

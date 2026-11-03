@@ -372,6 +372,9 @@ rebot_grasp/
 │   └── hand_eye.py               # 手眼标定求解
 ├── utils/
 │   ├── ordinary_grasp.py         # OBB 抓取姿态估计与可视化
+│   ├── pick_place.py             # 抓取放置流程（set.py 使用）
+│   ├── reach_map.py              # 可达区域：机械臂能抓取 / 释放的位置
+│   ├── grasp_check.py            # 腕部相机检查夹爪是否夹住物体
 │   └── transforms.py             # 坐标变换工具
 ├── scripts/
 │   ├── main.py                   # 主抓取程序
@@ -459,15 +462,37 @@ python scripts/main.py --skip-zero-check  # 跳过启动时的零位检查（见
 
 ### 3. `scripts/set.py` — 抓取与放置程序
 
-功能效果：将香蕉抓取并放置到盒子里面
+功能效果：抓取一个物体并放入或放到另一个物体上（默认将香蕉放入盒子）。两者都是文字标签，使用开放词汇模型（YOLOE / YOLO-World）时可以在程序运行中任意更换。
+
+```bash
+python scripts/set.py
+python scripts/set.py --pick "orange ball" --place "cup" --release-clearance 0.05
+python scripts/set.py --dry-run          # 只检测和规划，不移动机械臂
+python scripts/set.py --skip-zero-check  # 见 main.py 中的启动零位检查
+```
 
 完成流程：
-1. 相机与机械臂初始化，移动到预备点位
-2. 实时相机预览 + YOLO 目标检测与实例分割
-3. 按 `G` 冻结帧，经手眼变换计算机械臂目标位姿
-4. 机械臂移动抓取香蕉并抬高
-5. 机械臂将香蕉放置在盒子内，并回归初始姿态
-6. 按 `Q` 退出系统，机械臂回归零点
+1. 相机与机械臂初始化（启动零位检查），移动到预备点位
+2. 实时相机预览 + YOLO 检测两个物体，画面上显示可达区域
+3. 按 `G` 冻结帧，经手眼变换计算机械臂位姿，并逐一进行 IK 检查
+4. 机械臂抓取物体并抬起，腕部相机确认确实夹住
+5. 机械臂移动到目标物体上方，松开物体，回到预备位
+6. 按 `Q` 退出，夹爪松开，机械臂回归零点
+
+| 按键 | 功能 |
+| --- | --- |
+| `P` / `D` | 在窗口中输入新的抓取物体 / 放置目标（`Enter` 确认，`Esc` 取消） |
+| `G` | 拍照并执行抓取放置 |
+| `R` | 拍照后恢复实时预览 |
+| `Q` / `Esc` | 松开夹爪、回零并退出 |
+
+窗口中的两个滑块分别设置检测置信度阈值和释放间隙。
+
+**释放高度。** 物体在目标物体顶部加上释放间隙的高度处释放，而不是固定高度。顶部高度由目标物体分割区域内的深度测得（杯子取杯口；桌面上的位置约为 0），并对最近若干帧做平滑。右上角面板显示测得的顶部高度。
+
+**可达区域。** 绿色 = 机械臂可以在此抓取；蓝色斜纹 = 在当前释放高度下可以在此释放。两者都由预备位（每次抓取的起始姿态）的 IK 计算，因此只在机械臂处于预备位时有效。抓取区域在启动时计算一次（几秒钟）。释放高度变化至少 3 cm 并持续 1.5 s 后，释放区域会在后台重新计算。释放点越高，释放区域越小，超过一定高度后画面内任何位置都无法到达。移动之前，预抓取、抓取和释放位姿都会逐一做 IK 检查，因此不会抓起一个无法放置的物体。
+
+**夹持检查。** 抬起后，腕部相机观察两个夹指之间的空隙：夹住的物体离相机很近，空夹爪则看到远处的桌面。这样可以发现电机感觉不到的轻物体或按尺寸限位的夹取。最近一次检查的图像保存在 `Log/held_check_latest.jpg` 和 `Log/held_check_depth.jpg`，便于调参。设置 `grasp_pipeline.held_check.enabled: false` 可关闭该检查。
 
 
 ### 4. `scripts/ordinary_grasp_pipeline.py` — 简化抓取测试
@@ -558,6 +583,10 @@ python scripts/grasp.py --target-class "light blue coffee cup"
 | `grasp_pipeline.grasp.depth_quantile` | `float` | **深度分位数**：短轴抓取管线所使用的深度计算分位数。该数值越大，计算出的抓取点通常会越深。 |
 | `grasp_pipeline.grasp.pregrasp_offset_m` | `float` | **预抓取位偏移量**：相对于最终的目标抓取位置，沿末端进给方向往回退的距离，单位为**米 (m)**。 |
 | `grasp_pipeline.grasp.insertion_depth_m` | `float` | **插入深度**：GraspNet 执行抓取时，沿进给方向额外向前推入或插入的深度，单位为**米 (m)**。 |
+| `grasp_pipeline.held_check.enabled` | `bool` | **夹持检查**：抬起后用腕部相机检查夹指之间是否有物体（`scripts/set.py`）。 |
+| `grasp_pipeline.held_check.near_margin_m` | `float` | **夹持检查余量**：深度在夹爪点之外该距离以内即视为夹住物体，单位为**米 (m)**。 |
+| `place_task.pick`<br/>`place_task.place` | `string` | **抓取放置标签**：`scripts/set.py` 的初始抓取物体和放置目标，可在其窗口中修改。 |
+| `place_task.release_clearance_m` | `float` | **释放间隙**：在目标物体测得的顶部之上该高度处释放物体，单位为**米 (m)**。 |
 | `grasp_pipeline.grasp.min_base_z_m` | `float` | **最低抓取高度限制**：在**机械臂基坐标系**下允许的最低抓取 Z 轴高度，单位为**米 (m)**（作为底层防碰撞的安全边界）。 |
 | `graspnet` | 结构体配置 | **GraspNet 运行参数**：该配置项下的所有子参数供 `scripts/graspnet_camera_demo.py` 和 `scripts/grasp.py` 脚本运行时加载使用。 |
 

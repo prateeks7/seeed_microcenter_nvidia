@@ -62,6 +62,12 @@ yolo:
     - "green object"
     - "tool"
     - "box"
+    - "ball"
+
+place_task:                # starting values for scripts/set.py (all editable live in its window)
+  pick: "yellow banana"
+  place: "box"
+  release_clearance_m: 0.05  # drop this far above the destination's measured top (box rim, cup rim, table, ...)
 
 grasp_pipeline:
   infer_every_live: 3
@@ -70,6 +76,9 @@ grasp_pipeline:
     pregrasp_offset_m: 0.080
     insertion_depth_m: 0.015
     min_base_z_m: -0.01
+  held_check:              # after lifting, look between the jaws with the wrist camera (set.py)
+    enabled: true
+    near_margin_m: 0.03    # depth within (gripper point + this) counts as "something held"
 
 graspnet:
   checkpoint: "checkpoint-rs.tar"
