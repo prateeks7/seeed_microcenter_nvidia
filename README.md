@@ -470,6 +470,16 @@ Complete visual grasping pipeline:
 5. Press `G` to freeze frame, compute arm target pose via hand-eye transformation
 6. Arm moves to pre-grasp point → descends → gripper closes → lifts → returns to ready position
 
+```bash
+python scripts/main.py
+python scripts/main.py --dry-run          # estimate only, do not move the arm
+python scripts/main.py --skip-zero-check  # skip the startup zero check (see below)
+```
+
+**Startup zero check.** Before enabling the arm, every motor's position is read (read-only, nothing is enabled) and must be within `robot.zero_check_tol_rad` of zero: the arm folded at its rest pose and the gripper closed, which is where the motors were zeroed. A motor far from zero, often off by a whole turn after a crash or after the arm was moved by hand, would make every commanded pose wrong, so the program prints the readings and stops. Fold the arm to rest and close the gripper, or re-zero the motor that lost its zero. Only RobStride motors (B601-RS) can be read this way; DM motors are listed as not checked.
+
+**Size-aware gripper.** The detection measures the object's width across the jaws. With `robot.gripper.size_aware.enabled`, the gripper opens only `open_margin_m` wider than the object, closes no further than `squeeze_m` below its width (so a soft or mis-measured object is not crushed), and objects too wide for the jaws are skipped. The log shows the plan for each grasp, e.g. `object 4.2 cm: open to 7.2 cm, never close below 3.2 cm`, and why the gripper stopped (`contact`, `stopped at width limit`, `closed fully, no object`).
+
 ### 3. `scripts/set.py` — Grasp and Place Program
 
 Function: Grasp the banana and place it in the box
@@ -537,6 +547,7 @@ Pure YOLO detection demonstration with real-time display of detection boxes and 
 | Parameter | Type / Options | Meaning and Description |
 | :--- | :--- | :--- |
 | `robot.repo_root` | `string` / `null` | **Repository Root Directory**: Path to the `reBotArm_control_py` repository. When `null`, defaults to the internal relative path `sdk/reBotArm_control_py`. |
+| `robot.zero_check_tol_rad` | `float` | **Zero Check Tolerance**: At startup, every motor must read within this many radians of zero (arm folded at rest, gripper closed). See the startup zero check under `scripts/main.py`. |
 | `robot.ready_pose` | `array` | **Ready Pose**: The ready position the system arm moves to on startup. After each grasping task completes, the arm also automatically returns to this position. |
 | `robot.gripper.dm`<br/>`robot.gripper.rs` | struct object | **Gripper Hardware Parameters**: The system automatically selects and applies one of these two parameter groups based on the current actual hardware configuration in the SDK. |
 
@@ -547,6 +558,14 @@ For sub-parameters inside `robot.gripper.dm` or `robot.gripper.rs`:
 * **`angle_open`**, **`close_torque`**, **`default_force`**: Correspond to open angle, close torque, and default control force respectively; all must be填写**positive numbers**.
 * **`counterclockwise`**: Boolean value. Indicates the motor rotation direction used when closing (whether counterclockwise). The code automatically derives the signs of the open angle and close torque based on this logic.
 * **`tau_max`**: Torque upper limit.
+
+`robot.gripper.size_aware` applies to both arm versions and bounds the jaws by the object width measured by vision:
+
+* **`enabled`**: `false` restores the original behaviour (open fully, close until contact).
+* **`open_margin_m`**: Open this much wider than the object before approaching it.
+* **`squeeze_m`**: Never close more than this below the measured width.
+* **`fit_clearance_m`**: Skip objects wider than the maximum jaw opening minus this.
+* **`contact_speed_ratio`**: When the jaws reach the width limit, they count as touching the object if they were moving slower than this fraction of their peak closing speed.
 
 :::tip
 Note: For other advanced gripper control behavior parameters, refer to and define them in the `drivers/robot/grasp_driver.py` file.

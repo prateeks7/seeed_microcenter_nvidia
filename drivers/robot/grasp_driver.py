@@ -9,7 +9,10 @@ selected_arm_config(): read the SDK hardware YAML and choose controller mode.
 GraspDriver:
   start(): start SDK control and attach gripper tick handling.
   open_gripper(): open to a requested jaw distance.
-  grasp(): close with force control and report object contact.
+  open_for_object(): open to the measured object width plus a margin.
+  fits(): whether an object of a measured width fits between the jaws.
+  grasp(): close with force control and report object contact. Given the
+           measured object width, never close past width - squeeze.
   release_gripper(): open and return the gripper to closed rest.
   get_gripper_state(): return cached position, velocity, and torque.
   get_tcp_pose(): return the current TCP pose as a 4x4 matrix.
@@ -105,6 +108,51 @@ def selected_arm_config(repo_root: Optional[str] = None) -> SelectedArmConfig:
     raise ValueError(f"Cannot infer arm type from hardware config: {hw_path}")
 
 
+def check_motor_zeros(repo_root: Optional[str] = None, tol_rad: float = 0.15) -> tuple[bool, list[str]]:
+    """Read every motor's position (read-only, nothing enabled) and check it is near zero.
+
+    The scripts expect to start with the arm folded at its rest pose and the gripper closed,
+    which is where the motors were zeroed. A reading far from zero means a zero was lost
+    (e.g. the arm was moved by hand after a crash) and commanded targets would be wrong.
+    Returns (all_ok, report_lines). Only RobStride motors can be read this way.
+    """
+    from motorbridge import Controller
+
+    cfg = _read_yaml(selected_hardware_yaml(repo_root))
+    lines: list[str] = []
+    all_ok = True
+    ctrl = Controller(str(cfg["channel"]))
+    try:
+        for jc in cfg["joints"]:
+            name = jc["name"]
+            if jc.get("vendor") != "robstride":
+                lines.append(f"  {name:8s} not checked (vendor {jc.get('vendor')})")
+                continue
+            motor = ctrl.add_robstride_motor(int(jc["motor_id"]), int(jc["feedback_id"]), str(jc["model"]))
+            try:
+                pos = float(motor.robstride_get_param_f32(0x7019))   # mechPos, rad
+            except Exception as exc:
+                all_ok = False
+                lines.append(f"  {name:8s} NO RESPONSE ({exc}) - is the arm powered and CAN up?")
+                continue
+            ok = abs(pos) <= tol_rad
+            note = ""
+            if not ok:
+                turns = round(pos / (2 * np.pi))
+                if turns and abs(pos - turns * 2 * np.pi) <= tol_rad:
+                    note = f"  <- off by {turns:+d} full turn(s): zero lost"
+                else:
+                    note = "  <- not at zero"
+            all_ok &= ok
+            lines.append(f"  {name:8s} {pos:+7.3f} rad ({np.degrees(pos):+7.1f} deg){note}")
+    finally:
+        try:
+            ctrl.close_bus()
+        except Exception:
+            pass
+    return all_ok, lines
+
+
 class GraspDriver:
     MAX_DISTANCE_M = GRIPPER_MAX_DISTANCE_M
     _STATE_IDLE = "idle"
@@ -163,6 +211,19 @@ class GraspDriver:
         self._kd_close = 0.5
         self._stall_vel = 0.05
         self._startup_dist = 0.30
+
+        # Size-aware grasping: use the object width measured by vision to bound the jaws.
+        size_cfg = (gripper_config or {}).get("size_aware") or {}
+        self._size_aware = bool(size_cfg.get("enabled", False))
+        self._open_margin_m = abs(float(size_cfg.get("open_margin_m", 0.03)))
+        self._squeeze_m = abs(float(size_cfg.get("squeeze_m", 0.01)))
+        self._fit_clearance_m = abs(float(size_cfg.get("fit_clearance_m", 0.01)))
+        self._contact_speed_ratio = float(size_cfg.get("contact_speed_ratio", 0.8))
+        self._close_limit: Optional[float] = None   # motor angle the jaws must not close past
+        self._close_vel_ema = 0.0                   # smoothed closing speed, rad/s
+        self._peak_close_vel = 0.0
+        self._grasp_reason = ""
+
         self._state_lock = threading.Lock()
         self._state = self._STATE_IDLE
         self._target_pos = 0.0
@@ -309,18 +370,36 @@ class GraspDriver:
                 if pos_vel_torq is not None:
                     pos, vel, _ = pos_vel_torq
                     self._contact_pos = pos
+                    self._close_vel_ema = 0.8 * self._close_vel_ema + 0.2 * abs(vel)
+                    self._peak_close_vel = max(self._peak_close_vel, self._close_vel_ema)
                     moved = abs(pos - self._start_pos) >= self._startup_dist
                     at_hard_stop = self._open_sign * pos < self._open_sign * self._hard_stop_angle
-                    if moved and at_hard_stop:
+                    at_limit = (
+                        self._close_limit is not None
+                        and self._open_sign * pos <= self._open_sign * self._close_limit
+                    )
+                    if at_limit:
+                        # Reached width - squeeze: stop here instead of crushing on to fully closed.
+                        # Jaws still moving near full speed means nothing resisted them.
+                        contact = self._close_vel_ema < self._contact_speed_ratio * self._peak_close_vel
+                        self._target_pos = self._close_limit
+                        self._hold_torque = 0.0
+                        self._state = self._STATE_HOLDING
+                        self._grasp_result = contact
+                        self._grasp_reason = "stopped at width limit" + ("" if contact else ", no object felt")
+                        command = (self._close_limit, 0.0, self._kp_move, self._kd_move, 0.0)
+                    elif moved and at_hard_stop:
                         self._target_pos = 0.0
                         self._state = self._STATE_POSITION
                         self._position_reached = False
                         self._grasp_result = False
+                        self._grasp_reason = "closed fully, no object"
                         command = (0.0, 0.0, self._kp_move, self._kd_move, 0.0)
                     elif moved and abs(vel) < self._stall_vel:
                         self._target_pos = pos
                         self._state = self._STATE_HOLDING
                         self._grasp_result = True
+                        self._grasp_reason = "contact"
                         command = (pos, 0.0, self._kp_move, self._kd_move, self._hold_torque)
 
             elif state == self._STATE_HOLDING:
@@ -330,26 +409,75 @@ class GraspDriver:
             pos, vel, kp, kd, tau = command
             self._send_gripper_mit(pos, vel=vel, kp=kp, kd=kd, tau=tau)
 
-    def open_gripper(self, distance_m: float = GRIPPER_MAX_DISTANCE_M, timeout: float = 3.0) -> None:
-        self._ensure_running()
+    def _distance_to_angle(self, distance_m: float) -> float:
         d = float(np.clip(distance_m, 0.0, self.MAX_DISTANCE_M))
         raw_target = (d / self.MAX_DISTANCE_M) * self._angle_open
-        target = float(np.clip(raw_target, self._open_lo, self._open_hi))
+        return float(np.clip(raw_target, self._open_lo, self._open_hi))
 
-        self._set_position_target(target)
+    def open_gripper(self, distance_m: float = GRIPPER_MAX_DISTANCE_M, timeout: float = 3.0) -> None:
+        self._ensure_running()
+        self._set_position_target(self._distance_to_angle(distance_m))
         self._wait_until(self._position_done, timeout)
 
-    def grasp(self, force: Optional[float] = None, timeout: float = 5.0) -> bool:
+    def fits(self, object_width_m: Optional[float]) -> bool:
+        """Whether an object of this measured width fits between the open jaws."""
+        if object_width_m is None or not self._size_aware:
+            return True
+        return object_width_m + self._fit_clearance_m <= self.MAX_DISTANCE_M
+
+    def size_plan(self, object_width_m: Optional[float]) -> str:
+        """One-line description of how the jaws will be bounded for this object."""
+        if object_width_m is None or not self._size_aware:
+            return "size-aware gripping off: full open, close until contact"
+        open_m = min(object_width_m + self._open_margin_m, self.MAX_DISTANCE_M)
+        limit_m = max(object_width_m - self._squeeze_m, 0.0)
+        return (f"object {object_width_m * 100:.1f} cm: open to {open_m * 100:.1f} cm, "
+                f"never close below {limit_m * 100:.1f} cm")
+
+    def open_for_object(self, object_width_m: Optional[float], timeout: float = 3.0) -> None:
+        """Open just wider than the object (full open when size-aware gripping is off)."""
+        if object_width_m is None or not self._size_aware:
+            self.open_gripper(timeout=timeout)
+            return
+        self.open_gripper(object_width_m + self._open_margin_m, timeout=timeout)
+
+    def jaw_opening_m(self) -> Optional[float]:
+        """Current jaw opening, using the same linear angle <-> distance mapping as open_gripper()."""
+        state = self._read_gripper_state_cached()
+        if state is None:
+            return None
+        return float(np.clip(state[0] / self._angle_open, 0.0, 1.0)) * self.MAX_DISTANCE_M
+
+    @property
+    def last_grasp_reason(self) -> str:
+        with self._state_lock:
+            return self._grasp_reason
+
+    def grasp(
+        self,
+        force: Optional[float] = None,
+        timeout: float = 5.0,
+        object_width_m: Optional[float] = None,
+    ) -> bool:
+        """Close until contact. With object_width_m (and size_aware enabled), never close
+        past object_width_m - squeeze_m, so a soft or mis-detected object is not crushed."""
         self._ensure_running()
         start_pos, _, _ = self._wait_gripper_state()
         hold_torque = self._close_sign * float(
             np.clip(abs(force if force is not None else self._default_force), 0.05, self._tau_max)
         )
+        close_limit = None
+        if object_width_m is not None and self._size_aware:
+            close_limit = self._distance_to_angle(max(object_width_m - self._squeeze_m, 0.0))
         with self._state_lock:
             self._start_pos = start_pos
             self._contact_pos = start_pos
             self._target_pos = 0.0
             self._hold_torque = hold_torque
+            self._close_limit = close_limit
+            self._close_vel_ema = 0.0
+            self._peak_close_vel = 0.0
+            self._grasp_reason = ""
             self._state = self._STATE_CLOSING
             self._position_reached = False
             self._grasp_result = None
@@ -361,6 +489,7 @@ class GraspDriver:
                     self._state = self._STATE_POSITION
                     self._position_reached = False
                     self._grasp_result = False
+                    self._grasp_reason = "timed out"
 
         with self._state_lock:
             return bool(self._grasp_result)

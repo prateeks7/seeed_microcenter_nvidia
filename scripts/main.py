@@ -28,7 +28,7 @@ if PROJECT_ROOT_STR not in sys.path:
     sys.path.insert(0, PROJECT_ROOT_STR)
 
 from drivers.camera import make_camera
-from drivers.robot.grasp_driver import GraspDriver, selected_arm_config
+from drivers.robot.grasp_driver import GraspDriver, check_motor_zeros, selected_arm_config
 from reBotArm_control_py.actuator import RebotArm
 from reBotArm_control_py.controllers import RebotArmEndPose
 from utils.camera_utils import compose_cam_to_base_transform, load_config, load_hand_eye
@@ -74,19 +74,26 @@ def _execute_grasp(
     pre6d: tuple[float, ...],
     ready_cfg: dict[str, Any],
     dry_run: bool,
+    jaw_width_m: Optional[float] = None,
 ) -> bool:
     xg, yg, zg, rxg, ryg, rzg = grasp6d
     xp, yp, zp, rxp, ryp, rzp = pre6d
 
     print(f"[Grasp] pregrasp  xyz=({xp:+.3f},{yp:+.3f},{zp:+.3f})  rpy=({rxp:+.3f},{ryp:+.3f},{rzp:+.3f})")
     print(f"[Grasp] grasp     xyz=({xg:+.3f},{yg:+.3f},{zg:+.3f})  rpy=({rxg:+.3f},{ryg:+.3f},{rzg:+.3f})")
+    print(f"[Grasp] gripper   {grasp_driver.size_plan(jaw_width_m)}")
+
+    if not grasp_driver.fits(jaw_width_m):
+        print(f"[Grasp] Object too wide for the gripper "
+              f"({jaw_width_m * 100:.1f} cm, max {grasp_driver.MAX_DISTANCE_M * 100:.0f} cm); skipping")
+        return False
 
     if dry_run:
         print("[Grasp] dry run; skip motion")
         return False
 
     print("[Grasp] Open gripper")
-    grasp_driver.open_gripper()
+    grasp_driver.open_for_object(jaw_width_m)
 
     print("[Grasp] Move to pregrasp")
     if not controller.move_to_traj(xp, yp, zp, rxp, ryp, rzp, duration=2.0):
@@ -101,8 +108,8 @@ def _execute_grasp(
     _wait_motion(controller, 1.5)
 
     print("[Grasp] Closing")
-    ok = grasp_driver.grasp()
-    print("[Grasp] Holding object" if ok else "[Grasp] Empty grasp")
+    ok = grasp_driver.grasp(object_width_m=jaw_width_m)
+    print(("[Grasp] Holding object" if ok else "[Grasp] Empty grasp") + f" ({grasp_driver.last_grasp_reason})")
 
     print("[Grasp] Return ready")
     _move_ready(controller, ready_cfg)
@@ -153,6 +160,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ordinary short-axis grasp demo")
     parser.add_argument("--config", default="config/default.yaml")
     parser.add_argument("--dry-run", action="store_true", help="estimate only; do not move the arm")
+    parser.add_argument("--skip-zero-check", action="store_true",
+                        help="do not check that all motors read ~0 (arm at rest, gripper closed) before starting")
     return parser.parse_args()
 
 
@@ -213,6 +222,15 @@ def main() -> int:
         model, yolo_opts = load_yolo(cfg, project_root=PROJECT_ROOT)
 
         print("=== Init robot ===")
+        if not args.skip_zero_check:
+            zeros_ok, report = check_motor_zeros(robot_cfg.get("repo_root"),
+                                                 float(robot_cfg.get("zero_check_tol_rad", 0.15)))
+            print("[Zero check] Motor positions (expected: arm folded at rest, gripper closed):")
+            print("\n".join(report))
+            if not zeros_ok:
+                print("[Zero check] FAILED - not starting the arm. Fold the arm to its rest pose and close the "
+                      "gripper, or re-zero the motors that lost their zero (--skip-zero-check to override).")
+                return 1
         selected = selected_arm_config(robot_cfg.get("repo_root"))
         rebotarm = RebotArm()
         controller = RebotArmEndPose(rebotarm, arm_control_mode=selected.controller_mode)
@@ -310,7 +328,8 @@ def main() -> int:
                     T_cam2base,
                     pregrasp_offset_m,
                 )
-                _execute_grasp(controller, grasp_driver, grasp6d, pre6d, ready_cfg, dry_run=args.dry_run)
+                _execute_grasp(controller, grasp_driver, grasp6d, pre6d, ready_cfg, dry_run=args.dry_run,
+                               jaw_width_m=best.jaw_width_m)
 
     finally:
         print("\n[Exit] Release gripper and home")

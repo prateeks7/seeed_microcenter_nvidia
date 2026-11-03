@@ -447,6 +447,16 @@ python scripts/collect_handeye_eih.py --manual
 5. 按 `G` 冻结帧，经手眼变换计算机械臂目标位姿
 6. 机械臂移动到预抓取点 → 下降 → 夹爪闭合 → 提升 → 回预备位
 
+```bash
+python scripts/main.py
+python scripts/main.py --dry-run          # 只估计，不移动机械臂
+python scripts/main.py --skip-zero-check  # 跳过启动时的零位检查（见下文）
+```
+
+**启动零位检查。** 使能机械臂之前，程序会读取每个电机的位置（只读，不使能任何电机），要求都在 `robot.zero_check_tol_rad` 以内：即机械臂折叠在休息位、夹爪闭合，也就是电机标零时的姿态。若某个电机明显偏离零位（碰撞或手动掰动后常见整圈偏差），所有指令位姿都会出错，因此程序会打印读数并停止。请将机械臂折叠回休息位并闭合夹爪，或对丢失零位的电机重新标零。只有 RobStride 电机（B601-RS）可以这样读取，DM 电机显示为未检查。
+
+**按尺寸夹取。** 检测结果会测量物体在夹爪方向上的宽度。启用 `robot.gripper.size_aware.enabled` 后，夹爪只张开到比物体宽 `open_margin_m`，闭合时最多比物体宽度小 `squeeze_m`（避免夹坏柔软或测量偏差的物体），过宽的物体会被跳过。日志会打印每次夹取的计划，例如 `object 4.2 cm: open to 7.2 cm, never close below 3.2 cm`，以及夹爪停止的原因（`contact`、`stopped at width limit`、`closed fully, no object`）。
+
 ### 3. `scripts/set.py` — 抓取与放置程序
 
 功能效果：将香蕉抓取并放置到盒子里面
@@ -514,6 +524,7 @@ python scripts/grasp.py --target-class "light blue coffee cup"
 | 参数项 | 类型 / 可选值 | 含义与详细说明 |
 | :--- | :--- | :--- |
 | `robot.repo_root` | `string` / `null` | **仓库根目录**：`reBotArm_control_py` 仓库的路径。为 `null` 时默认使用内部相对路径 `sdk/reBotArm_control_py`。 |
+| `robot.zero_check_tol_rad` | `float` | **零位检查容差**：启动时每个电机的读数都必须在零位的该弧度范围内（机械臂折叠在休息位、夹爪闭合）。见 `scripts/main.py` 中的启动零位检查。 |
 | `robot.ready_pose` | `array` | **预备位**：系统机械臂启动后优先到达的预备位置。每次抓取任务结束后，机械臂也会自动返回至该位置。 |
 | `robot.gripper.dm`<br/>`robot.gripper.rs` | 结构体对象 | **夹爪硬件参数**：系统会根据 SDK 当前的实际硬件配置，自动选择并应用对应的这两组参数之一。 |
 
@@ -524,6 +535,14 @@ python scripts/grasp.py --target-class "light blue coffee cup"
 * **`angle_open`**、**`close_torque`**、**`default_force`**：分别对应张开角度、闭合力矩和默认控制力，均需填写**正数数值**。
 * **`counterclockwise`**：布尔值。指示闭合时采用的电机转动方向（是否为逆时针）。代码会据此逻辑自动推导出张开角度和闭合力矩的符号。
 * **`tau_max`**：力矩上限。
+
+`robot.gripper.size_aware` 对两种机械臂版本都生效，按视觉测得的物体宽度限制夹爪：
+
+* **`enabled`**：设为 `false` 恢复原来的行为（完全张开，闭合到接触为止）。
+* **`open_margin_m`**：接近物体前，比物体宽度多张开的距离。
+* **`squeeze_m`**：闭合时最多比测得宽度小的距离。
+* **`fit_clearance_m`**：宽度超过（最大开口 − 该值）的物体会被跳过。
+* **`contact_speed_ratio`**：夹爪到达宽度限位时，若速度低于峰值闭合速度的该比例，则判定为接触到物体。
 
 :::tip
 注：其余更高级的夹爪控制行为参数，可在 `drivers/robot/grasp_driver.py` 文件中进行查阅与定义。

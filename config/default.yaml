@@ -22,7 +22,14 @@ detection:
 
 robot:
   repo_root: null
+  zero_check_tol_rad: 0.15   # startup check: every motor must read within this of zero (arm folded, gripper closed)
   gripper:
+    size_aware:              # bound the jaws by the object width measured by vision
+      enabled: true
+      open_margin_m: 0.03    # open this much wider than the object before approaching
+      squeeze_m: 0.01        # never close more than this below the measured width
+      fit_clearance_m: 0.01  # skip objects wider than (max jaw opening - this)
+      contact_speed_ratio: 0.8  # at the limit, jaws slower than this x peak speed = object felt
     dm:
       angle_open: 5.0
       counterclockwise: true
